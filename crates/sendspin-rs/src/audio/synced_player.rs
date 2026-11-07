@@ -378,6 +378,7 @@ struct StartupCorrectionState {
     /// Padding noise is one-sided: anchoring to a high sample bakes that error
     /// into the timeline. Use the generation's floor, replaced on settling.
     min_playback_delta_us: u64,
+    is_wan: bool,
 }
 
 struct CorrectionDecision {
@@ -401,35 +402,38 @@ impl StartupCorrectionState {
             delay_settle: OutputDelaySettle::new(),
             started_at: None,
             min_playback_delta_us: u64::MAX,
+            is_wan: false,
         }
     }
 
     fn wan() -> Self {
         Self {
             planner: CorrectionPlanner::with_thresholds(
-                20_000,
-                40_000,
-                1_000_000,
+                50_000,
+                100_000,
+                2_000_000,
                 5.0,
-                0.005,
+                0.0,
             ),
             startup_planner: CorrectionPlanner::with_thresholds(
-                20_000,
-                40_000,
-                1_000_000,
+                50_000,
+                100_000,
+                2_000_000,
                 5.0,
-                STARTUP_MAX_SPEED_CORRECTION,
+                0.0,
             ),
             error_filter: SyncErrorFilter::new(),
             engage_gate: EngageGate::new(),
             delay_settle: OutputDelaySettle::new(),
             started_at: None,
             min_playback_delta_us: u64::MAX,
+            is_wan: true,
         }
     }
 
     fn reset(&mut self) {
-        *self = Self::new();
+        let is_wan = self.is_wan;
+        *self = if is_wan { Self::wan() } else { Self::new() };
     }
 
     fn reset_measurements(&mut self) {
@@ -2906,13 +2910,25 @@ mod tests {
         use super::StartupCorrectionState;
         use crate::audio::CorrectionSchedule;
 
-        let state = StartupCorrectionState::wan();
-        // Under 40ms error should NOT trigger speed correction in WAN mode
-        let schedule_under = state.planner.plan(35_000, 48_000, false);
-        assert_eq!(schedule_under, CorrectionSchedule::default(), "WAN mode must not correct under 40ms jitter");
+        let mut state = StartupCorrectionState::wan();
+        assert!(state.is_wan);
 
-        // Error above 40ms engages, but speed is strictly capped at 0.5% (drop_every == 200 at 48k)
+        // WAN mode never warps playback speed / pitch (max_speed_correction = 0.0)
+        let schedule_under = state.planner.plan(35_000, 48_000, false);
+        assert_eq!(schedule_under, CorrectionSchedule::default(), "WAN mode must not correct under jitter");
+
         let schedule_over = state.planner.plan(100_000, 48_000, false);
-        assert_eq!(schedule_over.drop_every_n_frames, 200, "speed correction must stay capped at 0.5% in WAN mode");
+        assert_eq!(schedule_over.drop_every_n_frames, 0, "WAN mode must never drop frames (pitch must stay 1.0x)");
+        assert_eq!(schedule_over.insert_every_n_frames, 0, "WAN mode must never insert frames");
+
+        // Reanchor triggers on massive desync (> 2s) without dropping frames
+        let schedule_gross = state.planner.plan(3_000_000, 48_000, false);
+        assert!(schedule_gross.reanchor, "gross desync triggers clean cursor reanchor");
+
+        // Calling reset() on a WAN state preserves WAN mode and 0% pitch warp
+        state.reset();
+        assert!(state.is_wan);
+        let schedule_after_reset = state.planner.plan(100_000, 48_000, false);
+        assert_eq!(schedule_after_reset.drop_every_n_frames, 0);
     }
 }
