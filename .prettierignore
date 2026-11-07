@@ -1,4 +1,5 @@
-# Dependencies
+# Vendored crates
+crates/
 node_modules/
 
 # Build outputs

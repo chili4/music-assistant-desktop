@@ -2,6 +2,13 @@ name: Build Installers (Windows & Linux)
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "**.md"
+      - ".gitignore"
+      - ".prettierignore"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -19,6 +26,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "lts/*"
+          cache: "yarn"
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -30,11 +38,13 @@ jobs:
         with:
           workspaces: "./src-tauri -> target"
 
-      - name: Install Node dependencies
-        run: npm install
+      - name: Enable Corepack & install dependencies
+        run: |
+          corepack enable
+          yarn install --frozen-lockfile
 
       - name: Build Windows Installer
-        run: npx tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
+        run: yarn tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
       - name: Upload Windows Executables
         uses: actions/upload-artifact@v4
@@ -55,6 +65,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "lts/*"
+          cache: "yarn"
 
       - name: Install Linux build dependencies
         run: |
@@ -69,6 +80,15 @@ jobs:
             xdg-utils \
             rpm
 
+      - name: Pin linuxdeploy for AppImage EGL fix
+        shell: bash
+        run: |
+          TAURI_TOOLKIT_PATH="${XDG_CACHE_HOME:-$HOME/.cache}/tauri"
+          mkdir -p "$TAURI_TOOLKIT_PATH"
+          wget -q "https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage" \
+            -O "$TAURI_TOOLKIT_PATH/linuxdeploy-x86_64.AppImage"
+          chmod +x "$TAURI_TOOLKIT_PATH/linuxdeploy-x86_64.AppImage"
+
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -79,11 +99,13 @@ jobs:
         with:
           workspaces: "./src-tauri -> target"
 
-      - name: Install Node dependencies
-        run: npm install
+      - name: Enable Corepack & install dependencies
+        run: |
+          corepack enable
+          yarn install --frozen-lockfile
 
       - name: Build Linux Packages (AppImage & RPM)
-        run: npx tauri build --bundles appimage,rpm --config '{"bundle":{"createUpdaterArtifacts":false}}'
+        run: yarn tauri build --bundles appimage,rpm --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
       - name: Upload Linux Packages
         uses: actions/upload-artifact@v4
