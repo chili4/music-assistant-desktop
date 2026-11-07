@@ -404,6 +404,30 @@ impl StartupCorrectionState {
         }
     }
 
+    fn wan() -> Self {
+        Self {
+            planner: CorrectionPlanner::with_thresholds(
+                20_000,
+                40_000,
+                1_000_000,
+                5.0,
+                0.005,
+            ),
+            startup_planner: CorrectionPlanner::with_thresholds(
+                20_000,
+                40_000,
+                1_000_000,
+                5.0,
+                STARTUP_MAX_SPEED_CORRECTION,
+            ),
+            error_filter: SyncErrorFilter::new(),
+            engage_gate: EngageGate::new(),
+            delay_settle: OutputDelaySettle::new(),
+            started_at: None,
+            min_playback_delta_us: u64::MAX,
+        }
+    }
+
     fn reset(&mut self) {
         *self = Self::new();
     }
@@ -1294,7 +1318,7 @@ impl SyncedPlayer {
         let CallbackOutputs { error } = outputs;
         let channels = format.channels as usize;
         let sample_rate = format.sample_rate;
-        let mut correction = StartupCorrectionState::new();
+        let mut correction = StartupCorrectionState::wan();
         let mut last_frame = vec![i32::EQUILIBRIUM; channels];
         let mut schedule = CorrectionSchedule::default();
         let mut insert_counter = 0u32;
@@ -1821,6 +1845,20 @@ impl SyncedPlayer {
                         return;
                     }
 
+                    // If no audio buffers are queued (e.g. playback is paused or buffer is fully depleted),
+                    // reset any active correction schedule and output silence immediately.
+                    // This prevents repeating last_frame at audio-rate frequencies (beeping/whistling).
+                    if queued_buffers == 0 {
+                        schedule = CorrectionSchedule::default();
+                        insert_counter = 0;
+                        drop_counter = 0;
+                        for sample in last_frame.iter_mut() {
+                            *sample = i32::EQUILIBRIUM;
+                        }
+                        emit_silence(data);
+                        return;
+                    }
+
                     f32_buffer.resize(data.len(), 0.0);
 
                     let (callback_underrun_frames, queued_after_us, buffers_after) = {
@@ -1843,8 +1881,12 @@ impl SyncedPlayer {
                                             out_index += 1;
                                         }
                                     } else {
-                                        for sample in &last_frame {
-                                            f32_buffer[out_index] = f32::from_sample(*sample);
+                                        missing_frames += 1;
+                                        for sample in last_frame.iter_mut() {
+                                            *sample = i32::EQUILIBRIUM;
+                                        }
+                                        for _ in 0..channels {
+                                            f32_buffer[out_index] = 0.0;
                                             out_index += 1;
                                         }
                                     }
@@ -1872,6 +1914,9 @@ impl SyncedPlayer {
                                 }
                             } else {
                                 missing_frames += 1;
+                                for sample in last_frame.iter_mut() {
+                                    *sample = i32::EQUILIBRIUM;
+                                }
                                 for _ in 0..channels {
                                     f32_buffer[out_index] = 0.0;
                                     out_index += 1;
@@ -2854,5 +2899,20 @@ mod tests {
             .next_frame(2, 48_000)
             .expect("should return a frame from the next buffer, not panic");
         assert_eq!(frame[0], 222, "expected frame from the ahead buffer");
+    }
+
+    #[test]
+    fn test_wan_correction_state() {
+        use super::StartupCorrectionState;
+        use crate::audio::CorrectionSchedule;
+
+        let state = StartupCorrectionState::wan();
+        // Under 40ms error should NOT trigger speed correction in WAN mode
+        let schedule_under = state.planner.plan(35_000, 48_000, false);
+        assert_eq!(schedule_under, CorrectionSchedule::default(), "WAN mode must not correct under 40ms jitter");
+
+        // Error above 40ms engages, but speed is strictly capped at 0.5% (drop_every == 200 at 48k)
+        let schedule_over = state.planner.plan(100_000, 48_000, false);
+        assert_eq!(schedule_over.drop_every_n_frames, 200, "speed correction must stay capped at 0.5% in WAN mode");
     }
 }

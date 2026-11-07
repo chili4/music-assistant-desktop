@@ -56,6 +56,24 @@ impl CorrectionPlanner {
         }
     }
 
+    /// A planner configured with custom deadband, engage, and reanchor thresholds
+    /// suitable for jittery connections (e.g. WAN / remote servers).
+    pub fn with_thresholds(
+        deadband_us: i64,
+        engage_us: i64,
+        reanchor_threshold_us: i64,
+        target_seconds: f64,
+        max_speed_correction: f64,
+    ) -> Self {
+        Self {
+            deadband_us,
+            engage_us,
+            reanchor_threshold_us,
+            target_seconds,
+            max_speed_correction,
+        }
+    }
+
     /// Plan a correction schedule from sync error and sample rate.
     ///
     /// `error_us` is the sync error in microseconds (positive = ahead, negative = behind).
