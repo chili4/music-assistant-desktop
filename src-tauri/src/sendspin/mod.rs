@@ -430,11 +430,10 @@ fn update_status(status: ConnectionStatus) {
 }
 
 const PLAYER_BUFFER_CAPACITY: u32 = 16 * 1024 * 1024;
-// Startup/system lead time: enough for codec setup and audio-device/DAC readiness,
-// without adding the larger ongoing network-jitter buffer to initial playback.
-const REQUIRED_LEAD_TIME_MS: u32 = 50;
-// Ongoing playback buffer: intentionally conservative until we have adaptive tuning.
-const MIN_BUFFER_MS: u32 = 500;
+// Startup/system lead time: set to 1000ms to comfortably accommodate WAN / VPS network latency.
+const REQUIRED_LEAD_TIME_MS: u32 = 1000;
+// Ongoing playback buffer: 2000ms gives stable buffer headroom over WAN jitter.
+const MIN_BUFFER_MS: u32 = 2000;
 
 fn clamp_static_delay_ms(sync_delay_ms: i32) -> u16 {
     sync_delay_ms.clamp(0, 5_000) as u16
